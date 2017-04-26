@@ -233,7 +233,7 @@ object VariantDataset {
     kt.keyFields.map(_.typ) match {
       case Array(TVariant) =>
       case arr => fatal("Require one key column of type Variant to produce a variant dataset, " +
-        s"but found [ ${arr.mkString(", ")} ]")
+        s"but found [ ${ arr.mkString(", ") } ]")
     }
 
     val rdd = kt.keyedRDD()
@@ -708,7 +708,6 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
   }
 
 
-
   def gqByDP(path: String) {
     val nBins = GQByDPBins.nBins
     val binStep = GQByDPBins.binStep
@@ -890,7 +889,7 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
 
   def sampleQC(root: String = "sa.qc", keepStar: Boolean = false): VariantDataset = SampleQC(vds, root, keepStar)
 
-  def rrm(forceBlock : Boolean = false, forceGramian : Boolean = false): KinshipMatrix = {
+  def rrm(forceBlock: Boolean = false, forceGramian: Boolean = false): KinshipMatrix = {
     requireSplit("rrm")
     info(s"rrm: Computing Realized Relationship Matrix...")
     val (rrm, m) = ComputeRRM(vds, forceBlock, forceGramian)
@@ -942,7 +941,7 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
     val vaRequiresConversion = SparkAnnotationImpex.requiresConversion(vaSignature)
 
     val genotypeSignature = vds.genotypeSignature
-    require(genotypeSignature == TGenotype, s"Expecting a genotype signature of TGenotype, but found `${genotypeSignature.toPrettyString()}'")
+    require(genotypeSignature == TGenotype, s"Expecting a genotype signature of TGenotype, but found `${ genotypeSignature.toPrettyString() }'")
 
     vds.hadoopConf.writeTextFile(dirname + "/partitioner.json.gz") { out =>
       Serialization.write(vds.rdd.orderedPartitioner.toJSON, out)
@@ -1033,4 +1032,93 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
   }
 
   def toGDS: GenericDataset = vds.mapValues(g => g: Any).copy(isGenericGenotype = true)
+
+  def pseudoControls(fam: String): VariantDataset = {
+
+    val pedigree = Pedigree.read(fam, vds.sparkContext.hadoopConfiguration, vds.sampleIds)
+
+    val completeTrios = pedigree.completeTrios
+    val nonTrioSamples = vds.sampleIds.length - completeTrios.length * 3
+    if (nonTrioSamples > 0)
+      warn(s"""removed $nonTrioSamples samples without complete trio information""")
+
+    val included = mutable.Set.empty[String]
+    var excluded = 0
+
+    val trios = pedigree.completeTrios.filter { trio =>
+      if (included(trio.dad) || included(trio.mom) || included(trio.kid)) {
+        excluded += 1
+        false
+      } else {
+        included += trio.dad
+        included += trio.mom
+        included += trio.kid
+        true
+      }
+    }.toArray
+
+    if (excluded > 0)
+      warn(s"""Removed $excluded trios due to sample overlap among trio roles""")
+
+    info(s"""producing pseudocontrols for ${ trios.length } probands""")
+
+    val annotationMap = vds.sampleIdsAndAnnotations.toMap
+
+    val (saSignature, inserter) = vds.insertSA(TBoolean, "pseudocontrol")
+
+    val ids = trios.flatMap { t => Iterator(t.kid, t.kid + "_pseudo") }
+    val annotations = trios.flatMap { t =>
+      val annotation = annotationMap(t.kid)
+      Iterator(inserter(annotation, Some(false)), inserter(annotation, Some(true)))
+    }
+
+    vds.mapCompleteTrios(trios) { case (v, va, gs, triodata) =>
+
+      (va, triodata.flatMap { case (_, kid, dad, mom) =>
+        if (dad.unboxedGT < 0 || mom.unboxedGT < 0 || kid.unboxedGT < 0)
+          Iterator(Genotype(), Genotype())
+        else {
+          val dadGt = Genotype.gtPair(dad.unboxedGT)
+          val momGt = Genotype.gtPair(mom.unboxedGT)
+          val kidGt = Genotype.gtPair(kid.unboxedGT)
+
+          val kj = kidGt.j
+          val kk = kidGt.k
+          val pseudo = {
+            val dj = dadGt.j
+            val dk = dadGt.k
+
+            if (dj == kj || dj == kk)
+              Some(dj -> dk)
+            else if (dk == kj || dk == kk)
+              Some(dk -> dj)
+            else {
+              None
+            }
+          }.flatMap { case (transDad, untransDad) =>
+            val mj = momGt.j
+            val mk = momGt.k
+
+            val maternalAllele = if (transDad == kj) kk else kj
+
+            if (maternalAllele == mj)
+              Some(GTPair.fromNonNormalized(untransDad, mk).p)
+            else if (maternalAllele == mk)
+              Some(GTPair.fromNonNormalized(untransDad, mj).p)
+            else
+              None
+          }
+
+          pseudo match {
+            case Some(gt) =>
+              assert(gt >= 0)
+              Iterator(kid, Genotype(gt))
+            case None =>
+              Iterator(Genotype(), Genotype())
+          }
+        }
+      })
+    }.copy(sampleIds = ids, saSignature = saSignature, sampleAnnotations = annotations)
+  }
+
 }

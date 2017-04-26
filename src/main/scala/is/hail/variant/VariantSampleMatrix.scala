@@ -2,8 +2,8 @@ package is.hail.variant
 
 import java.nio.ByteBuffer
 import java.util
-import scala.collection.JavaConverters._
 
+import scala.collection.JavaConverters._
 import is.hail.annotations._
 import is.hail.check.Gen
 import is.hail.expr.{EvalContext, TAggregable, _}
@@ -11,7 +11,7 @@ import is.hail.io._
 import is.hail.io.annotators.{BedAnnotator, IntervalListAnnotator}
 import is.hail.io.plink.{FamFileConfig, PlinkLoader}
 import is.hail.keytable.KeyTable
-import is.hail.methods.{Aggregators, DuplicateReport, Filter, VEP}
+import is.hail.methods._
 import is.hail.sparkextras._
 import is.hail.utils._
 import is.hail.variant.Variant.orderedKey
@@ -1986,5 +1986,37 @@ class VariantSampleMatrix[T](val hc: HailContext, val metadata: VariantMetadata,
     )
 
     hConf.writeTextFile(dirname + "/metadata.json.gz")(Serialization.writePretty(json, _))
+  }
+
+  def mapCompleteTrios(trios: Array[CompleteTrio])
+    (f: (Variant, Annotation, Iterable[T], IndexedSeq[(CompleteTrio, T, T, T)]) => (Annotation, Iterable[T])):
+    VariantSampleMatrix[T] = {
+    val sampleTrioRolesMap = mutable.Map.empty[String, List[(Int, Int)]]
+
+    trios.zipWithIndex.foreach { case (t, tidx) =>
+      sampleTrioRolesMap += (t.kid -> ((tidx, 0) :: sampleTrioRolesMap.getOrElse(t.kid, Nil)))
+      sampleTrioRolesMap += (t.dad -> ((tidx, 1) :: sampleTrioRolesMap.getOrElse(t.dad, Nil)))
+      sampleTrioRolesMap += (t.mom -> ((tidx, 2) :: sampleTrioRolesMap.getOrElse(t.mom, Nil)))
+    }
+
+    val localF = f
+    val roles = sampleIds.map(sampleTrioRolesMap.getOrElse(_, Nil)).toArray
+    val sampleTrioRolesBc = sparkContext.broadcast(roles)
+    val triosBc = sparkContext.broadcast(trios)
+    val nTrio = trios.length
+
+    val t = uninitialized[T]
+    copy(rdd.mapPartitions({ it =>
+      val arr = MultiArray2.fill[T](nTrio, 3)(t)
+      it.map { case (v, (va, gs)) =>
+        gs.iterator.zipWithIndex.foreach { case (g, i) =>
+          sampleTrioRolesBc.value(i).foreach { case (tIdx, rIdx) =>
+            arr.update(tIdx, rIdx, g)
+          }
+        }
+        val localTrios = triosBc.value
+        (v, localF(v, va, gs, localTrios.indices.map(i => (localTrios(i), arr(i, 0), arr(i, 1), arr(i, 2)))))
+      }
+    }, preservesPartitioning = true).asOrderedRDD)
   }
 }
