@@ -147,7 +147,7 @@ object VSMSubgen {
 }
 
 class VariantSampleMatrix[T](val hc: HailContext, val metadata: VariantMetadata,
-  val rdd: OrderedRDD[Locus, Variant, (Annotation, Iterable[T])])(implicit tct: ClassTag[T]) extends JoinAnnotator {
+  val rdd: OrderedRDD[Locus, Variant, (Annotation, Iterable[T])])(implicit val tct: ClassTag[T]) extends JoinAnnotator {
 
   lazy val sampleIdsBc = sparkContext.broadcast(sampleIds)
 
@@ -1988,9 +1988,9 @@ class VariantSampleMatrix[T](val hc: HailContext, val metadata: VariantMetadata,
     hConf.writeTextFile(dirname + "/metadata.json.gz")(Serialization.writePretty(json, _))
   }
 
-  def mapCompleteTrios(trios: Array[CompleteTrio])
-    (f: (Variant, Annotation, Iterable[T], IndexedSeq[(CompleteTrio, T, T, T)]) => (Annotation, Iterable[T])):
-    VariantSampleMatrix[T] = {
+  def mapCompleteTrios[U](trios: Array[CompleteTrio])
+    (f: (Variant, Annotation, Iterable[T], IndexedSeq[(CompleteTrio, T, T, T)]) => U)(implicit uct: ClassTag[U]):
+    RDD[U] = {
     val sampleTrioRolesMap = mutable.Map.empty[String, List[(Int, Int)]]
 
     trios.zipWithIndex.foreach { case (t, tidx) =>
@@ -1999,15 +1999,15 @@ class VariantSampleMatrix[T](val hc: HailContext, val metadata: VariantMetadata,
       sampleTrioRolesMap += (t.mom -> ((tidx, 2) :: sampleTrioRolesMap.getOrElse(t.mom, Nil)))
     }
 
-    val localF = f
     val roles = sampleIds.map(sampleTrioRolesMap.getOrElse(_, Nil)).toArray
     val sampleTrioRolesBc = sparkContext.broadcast(roles)
     val triosBc = sparkContext.broadcast(trios)
     val nTrio = trios.length
+    val localTct = tct
 
-    val t = uninitialized[T]
-    copy(rdd.mapPartitions({ it =>
-      val arr = MultiArray2.fill[T](nTrio, 3)(t)
+    rdd.mapPartitions { it =>
+      val t = uninitialized[T]
+      val arr = MultiArray2.fill[T](nTrio, 3)(t)(localTct)
       it.map { case (v, (va, gs)) =>
         gs.iterator.zipWithIndex.foreach { case (g, i) =>
           sampleTrioRolesBc.value(i).foreach { case (tIdx, rIdx) =>
@@ -2015,8 +2015,8 @@ class VariantSampleMatrix[T](val hc: HailContext, val metadata: VariantMetadata,
           }
         }
         val localTrios = triosBc.value
-        (v, localF(v, va, gs, localTrios.indices.map(i => (localTrios(i), arr(i, 0), arr(i, 1), arr(i, 2)))))
+        f(v, va, gs, localTrios.indices.map(i => (localTrios(i), arr(i, 0), arr(i, 1), arr(i, 2))))
       }
-    }, preservesPartitioning = true).asOrderedRDD)
+    }
   }
 }

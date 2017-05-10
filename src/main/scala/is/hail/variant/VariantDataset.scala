@@ -1060,21 +1060,27 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
     if (excluded > 0)
       warn(s"""Removed $excluded trios due to sample overlap among trio roles""")
 
-    info(s"""producing pseudocontrols for ${ trios.length } probands""")
+    info(s"producing pseudocontrols for ${ trios.length } probands")
 
     val annotationMap = vds.sampleIdsAndAnnotations.toMap
 
-    val (saSignature, inserter) = vds.insertSA(TBoolean, "pseudocontrol")
+    val (saSignature, inserter) = vds.insertSA(TBoolean, "pseudo")
 
     val ids = trios.flatMap { t => Iterator(t.kid, t.kid + "_pseudo") }
+    val dups = ids.duplicates()
+    if (ids.duplicates().nonEmpty)
+      fatal(
+        s"""Found duplicate sample IDs after appending "_pseudo":
+           |  [ @1 ]""".stripMargin, dups)
+
     val annotations = trios.flatMap { t =>
       val annotation = annotationMap(t.kid)
       Iterator(inserter(annotation, Some(false)), inserter(annotation, Some(true)))
     }
 
-    vds.mapCompleteTrios(trios) { case (v, va, gs, triodata) =>
+    val rdd = vds.mapCompleteTrios(trios) { case (v, va, gs, triodata) =>
 
-      (va, triodata.flatMap { case (_, kid, dad, mom) =>
+      (v, (va, triodata.flatMap { case (_, kid, dad, mom) =>
         if (dad.unboxedGT < 0 || mom.unboxedGT < 0 || kid.unboxedGT < 0)
           Iterator(Genotype(), Genotype())
         else {
@@ -1117,8 +1123,12 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
               Iterator(Genotype(), Genotype())
           }
         }
-      })
-    }.copy(sampleIds = ids, saSignature = saSignature, sampleAnnotations = annotations)
-  }
+      }: Iterable[Genotype]))
+    }
 
+    vds.copy(rdd = OrderedRDD(rdd, vds.rdd.orderedPartitioner),
+      sampleIds = ids,
+      sampleAnnotations = annotations,
+      saSignature = saSignature)
+  }
 }
