@@ -1108,9 +1108,9 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
             val maternalAllele = if (transDad == kj) kk else kj
 
             if (maternalAllele == mj)
-              Some(GTPair.fromNonNormalized(untransDad, mk).p)
+              Some(Genotype.gtIndex(GTPair.fromNonNormalized(untransDad, mk)))
             else if (maternalAllele == mk)
-              Some(GTPair.fromNonNormalized(untransDad, mj).p)
+              Some(Genotype.gtIndex(GTPair.fromNonNormalized(untransDad, mj)))
             else
               None
           }
