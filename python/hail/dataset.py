@@ -3296,7 +3296,7 @@ class VariantDataset(object):
         """
 
         self._jvdf.pseudoControls(fam)
-        return VariantDataset(self.hc, jvdf)
+        return VariantDataset(self.hc, jvds)
 
     @handle_py4j
     def query_samples_typed(self, exprs):
