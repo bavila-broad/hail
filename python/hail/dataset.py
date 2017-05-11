@@ -3279,6 +3279,26 @@ class VariantDataset(object):
         return self._genotype_schema
 
     @handle_py4j
+    @requireTGenotype
+    def pseudocontrols(self, fam):
+        """Create cases and pseudocontrols from trios
+
+        .. include:: requireTGenotype.rst
+
+        **Examples**
+
+        examples go here
+
+        **Notes**
+
+        notes go here
+
+        """
+
+        self._jvdf.pseudocontrols(fam)
+        return VariantDataset(self.hc, jvdf)
+
+    @handle_py4j
     def query_samples_typed(self, exprs):
         """Performs aggregation queries over samples and sample annotations, and returns Python object(s) and type(s).
 
