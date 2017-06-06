@@ -38,3 +38,10 @@ class PseudocontrolsSuite extends SparkSuite {
       assert(p)
     }
   }
+
+  @Test def badVCF() {
+    val vds = hc.read("/Users/bavila/Documents/French-Canadian/ds.rioux.repartDownsample.vds")
+    val pcvds = vds.pseudoControls("/Users/bavila/Documents/French-Canadian/finalrioux.fam")
+    pcvds.countVariants()
+  }
+}

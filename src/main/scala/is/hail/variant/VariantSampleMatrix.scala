@@ -1992,7 +1992,6 @@ class VariantSampleMatrix[T](val hc: HailContext, val metadata: VariantMetadata,
     (f: (Variant, Annotation, Iterable[T], IndexedSeq[(CompleteTrio, T, T, T)]) => U)(implicit uct: ClassTag[U]):
     RDD[U] = {
     val sampleTrioRolesMap = mutable.Map.empty[String, List[(Int, Int)]]
-
     trios.zipWithIndex.foreach { case (t, tidx) =>
       sampleTrioRolesMap += (t.kid -> ((tidx, 0) :: sampleTrioRolesMap.getOrElse(t.kid, Nil)))
       sampleTrioRolesMap += (t.dad -> ((tidx, 1) :: sampleTrioRolesMap.getOrElse(t.dad, Nil)))
@@ -2003,19 +2002,28 @@ class VariantSampleMatrix[T](val hc: HailContext, val metadata: VariantMetadata,
     val sampleTrioRolesBc = sparkContext.broadcast(roles)
     val triosBc = sparkContext.broadcast(trios)
     val nTrio = trios.length
+    println(nTrio)
     val localTct = tct
 
     rdd.mapPartitions { it =>
       val t = uninitialized[T]
       val arr = MultiArray2.fill[T](nTrio, 3)(t)(localTct)
       it.map { case (v, (va, gs)) =>
+        var countUpdate = 0
+        var count = 0
         gs.iterator.zipWithIndex.foreach { case (g, i) =>
+          count += 1
           sampleTrioRolesBc.value(i).foreach { case (tIdx, rIdx) =>
+            countUpdate += 1
             arr.update(tIdx, rIdx, g)
           }
         }
+        arr
+        println(arr.forall(g => g != null))
         val localTrios = triosBc.value
-        f(v, va, gs, localTrios.indices.map(i => (localTrios(i), arr(i, 0), arr(i, 1), arr(i, 2))))
+        f(v, va, gs, localTrios.indices.map {i =>
+//          println(s"maptrios kid=${arr(i, 0)} dad=${arr(i, 1)} mom=${arr(i, 2)}")
+          (localTrios(i), arr(i, 0), arr(i, 1), arr(i, 2)) })
       }
     }
   }

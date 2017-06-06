@@ -3285,7 +3285,7 @@ class VariantDataset(object):
 
         .. include:: requireTGenotype.rst
 
-        **Examples**
+        **Examples**'
 
         examples go here
 

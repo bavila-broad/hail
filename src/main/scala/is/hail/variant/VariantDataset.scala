@@ -1075,12 +1075,14 @@ class VariantDatasetFunctions(private val vds: VariantSampleMatrix[Genotype]) ex
 
     val annotations = trios.flatMap { t =>
       val annotation = annotationMap(t.kid)
-      Iterator(inserter(annotation, Some(false)), inserter(annotation, Some(true)))
+      Iterator(inserter(annotation, false), inserter(annotation, true))
     }
 
     val rdd = vds.mapCompleteTrios(trios) { case (v, va, gs, triodata) =>
-
+      println(s"v=$v")
       (v, (va, triodata.flatMap { case (_, kid, dad, mom) =>
+        println(s"kid=$kid dad=$dad mom=$mom")
+
         if (dad.unboxedGT < 0 || mom.unboxedGT < 0 || kid.unboxedGT < 0)
           Iterator(Genotype(), Genotype())
         else {
